@@ -20,6 +20,7 @@ void Database::Init(Handle<Object> target) {
 
     NODE_SET_PROTOTYPE_METHOD(constructor_template, "close", Close);
     NODE_SET_PROTOTYPE_METHOD(constructor_template, "exec", Exec);
+    NODE_SET_PROTOTYPE_METHOD(constructor_template, "execSync", ExecSync);
     NODE_SET_PROTOTYPE_METHOD(constructor_template, "wait", Wait);
     NODE_SET_PROTOTYPE_METHOD(constructor_template, "loadExtension", LoadExtension);
     NODE_SET_PROTOTYPE_METHOD(constructor_template, "serialize", Serialize);
@@ -497,17 +498,24 @@ Handle<Value> Database::Exec(const Arguments& args) {
 
 void Database::Work_BeginExec(Baton* baton) {
     assert(baton->db->locked);
-    assert(baton->db->open);
-    assert(baton->db->handle);
-    assert(baton->db->pending == 0);
+    _BeginExec(baton);
     int status = uv_queue_work(uv_default_loop(),
         &baton->request, Work_Exec, (uv_after_work_cb)Work_AfterExec);
     assert(status == 0);
 }
 
+void Database::_BeginExec(Baton* baton) {
+    assert(baton->db->open);
+    assert(baton->db->handle);
+    assert(baton->db->pending == 0);
+}
+
 void Database::Work_Exec(uv_work_t* req) {
     ExecBaton* baton = static_cast<ExecBaton*>(req->data);
+    _Exec(baton);
+}
 
+void Database::_Exec(ExecBaton* baton) {
     char* message = NULL;
     baton->status = sqlite3_exec(
         baton->db->handle,
@@ -527,7 +535,6 @@ void Database::Work_AfterExec(uv_work_t* req) {
     HandleScope scope;
     ExecBaton* baton = static_cast<ExecBaton*>(req->data);
     Database* db = baton->db;
-
 
     if (baton->status != SQLITE_OK) {
         EXCEPTION(String::New(baton->message.c_str()), baton->status, exception);
@@ -549,6 +556,28 @@ void Database::Work_AfterExec(uv_work_t* req) {
     db->Process();
 
     delete baton;
+}
+
+Handle<Value> Database::ExecSync(const Arguments& args) {
+    HandleScope scope;
+    Database* db = ObjectWrap::Unwrap<Database>(args.This());
+
+    REQUIRE_ARGUMENT_STRING(0, sql);
+    Handle<Function> no_callback;
+
+    ExecBaton* baton = new ExecBaton(db, no_callback, *sql);
+
+    _BeginExec(baton);
+    _Exec(baton);
+
+    if (baton->status != SQLITE_OK) {
+        EXCEPTION(String::New(baton->message.c_str()), baton->status, exception);
+        ThrowException(exception);
+    }
+
+    delete baton;
+
+    return args.This();
 }
 
 Handle<Value> Database::Wait(const Arguments& args) {

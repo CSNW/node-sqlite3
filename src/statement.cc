@@ -24,6 +24,7 @@ void Statement::Init(Handle<Object> target) {
     NODE_SET_PROTOTYPE_METHOD(constructor_template, "get", Get);
     NODE_SET_PROTOTYPE_METHOD(constructor_template, "run", Run);
     NODE_SET_PROTOTYPE_METHOD(constructor_template, "all", All);
+    NODE_SET_PROTOTYPE_METHOD(constructor_template, "allSync", AllSync);
     NODE_SET_PROTOTYPE_METHOD(constructor_template, "each", Each);
     NODE_SET_PROTOTYPE_METHOD(constructor_template, "reset", Reset);
     NODE_SET_PROTOTYPE_METHOD(constructor_template, "finalize", Finalize);
@@ -95,9 +96,13 @@ Handle<Value> Statement::New(const Arguments& args) {
         return ThrowException(Exception::TypeError(
             String::New("SQL query expected")));
     }
-    else if (length > 2 && !args[2]->IsUndefined() && !args[2]->IsFunction()) {
+    if (length > 2 && !args[2]->IsUndefined() && !args[2]->IsFunction()) {
         return ThrowException(Exception::TypeError(
             String::New("Callback expected")));
+    }
+    if (length > 3 && !args[3]->IsBooleanObject()) {
+        return ThrowException(Exception::TypeError(
+            String::New("Boolean is_sync expected as last argument")));
     }
 
     Database* db = ObjectWrap::Unwrap<Database>(args[0]->ToObject());
@@ -110,8 +115,49 @@ Handle<Value> Statement::New(const Arguments& args) {
 
     PrepareBaton* baton = new PrepareBaton(db, Local<Function>::Cast(args[2]), stmt);
     baton->sql = std::string(*String::Utf8Value(sql));
-    db->Schedule(Work_BeginPrepare, baton);
 
+    Local<BooleanObject> is_sync = Local<BooleanObject>::Cast(args[3]);
+    if (is_sync->BooleanValue()) {
+        assert(baton->db->open);
+        baton->db->pending++;
+
+        // In case preparing fails, we use a mutex to make sure we get the associated
+        // error message.
+        sqlite3_mutex* mtx = sqlite3_db_mutex(baton->db->handle);
+        sqlite3_mutex_enter(mtx);
+
+        stmt->status = sqlite3_prepare_v2(
+            baton->db->handle,
+            baton->sql.c_str(),
+            baton->sql.size(),
+            &stmt->handle,
+            NULL
+        );
+
+        if (stmt->status != SQLITE_OK) {
+            stmt->message = std::string(sqlite3_errmsg(baton->db->handle));
+            stmt->handle = NULL;
+        }
+
+        sqlite3_mutex_leave(mtx);
+
+        if (stmt->status != SQLITE_OK) {
+            Error(baton);
+            stmt->Finalize();
+        }
+        else {
+            stmt->prepared = true;
+            if (!baton->callback.IsEmpty() && baton->callback->IsFunction()) {
+                Local<Value> argv[] = { Local<Value>::New(Null()) };
+                TRY_CATCH_CALL(stmt->handle_, baton->callback, 1, argv);
+            }
+        }
+
+        STATEMENT_END();
+    }
+    else {
+        db->Schedule(Work_BeginPrepare, baton);
+    }
     return args.This();
 }
 
@@ -506,7 +552,10 @@ void Statement::Work_BeginAll(Baton* baton) {
 
 void Statement::Work_All(uv_work_t* req) {
     STATEMENT_INIT(RowsBaton);
+    _All(baton, stmt);
+}
 
+void Statement::_All(RowsBaton* baton, Statement* stmt) {
     sqlite3_mutex* mtx = sqlite3_db_mutex(stmt->db->handle);
     sqlite3_mutex_enter(mtx);
 
@@ -541,15 +590,7 @@ void Statement::Work_AfterAll(uv_work_t* req) {
         // Fire callbacks.
         if (!baton->callback.IsEmpty() && baton->callback->IsFunction()) {
             if (baton->rows.size()) {
-                // Create the result array from the data we acquired.
-                Local<Array> result(Array::New(baton->rows.size()));
-                Rows::const_iterator it = baton->rows.begin();
-                Rows::const_iterator end = baton->rows.end();
-                for (int i = 0; it < end; it++, i++) {
-                    result->Set(i, RowToJS(*it));
-                    delete *it;
-                }
-
+                Local<Array> result = CreateResultArray(baton);
                 Local<Value> argv[] = { Local<Value>::New(Null()), result };
                 TRY_CATCH_CALL(stmt->handle_, baton->callback, 2, argv);
             }
@@ -565,6 +606,57 @@ void Statement::Work_AfterAll(uv_work_t* req) {
     }
 
     STATEMENT_END();
+}
+
+Local<Array> Statement::CreateResultArray(RowsBaton* baton) {
+    Local<Array> result(Array::New(baton->rows.size()));
+    Rows::const_iterator it = baton->rows.begin();
+    Rows::const_iterator end = baton->rows.end();
+    for (int i = 0; it < end; it++, i++) {
+        result->Set(i, RowToJS(*it));
+        delete *it;
+    }
+    return result;
+}
+
+Handle<Value> Statement::AllSync(const Arguments& args) {
+    HandleScope scope;
+    Statement* stmt = ObjectWrap::Unwrap<Statement>(args.This());
+
+    RowsBaton* baton = stmt->Bind<RowsBaton>(args);
+    if (baton == NULL) {
+        return ThrowException(Exception::Error(String::New("Data type is not supported")));
+    }
+    
+    assert(baton);
+    assert(baton->stmt);
+    assert(!baton->stmt->locked);
+    assert(!baton->stmt->finalized);
+    assert(baton->stmt->prepared);
+    baton->stmt->locked = true;
+    baton->stmt->db->pending++;
+
+    _All(baton, stmt);
+
+    Local<Array> result;
+    if (stmt->status != SQLITE_DONE) {
+        //Error(baton);
+        // Question: Do I need to finalize the statement or do other cleanup?
+        return ThrowException(Exception::Error(String::New("AllSync Error")));
+    }
+    else {
+        if (baton->rows.size()) {
+            result = CreateResultArray(baton);
+        }
+        else {
+            // There were no result rows.
+            result = Array::New(0);
+        }
+    }
+
+    STATEMENT_END();
+    
+    return scope.Close(result);
 }
 
 Handle<Value> Statement::Each(const Arguments& args) {

@@ -128,8 +128,12 @@ protected:
 
     static Handle<Value> Exec(const Arguments& args);
     static void Work_BeginExec(Baton* baton);
+    static void _BeginExec(Baton* baton);
     static void Work_Exec(uv_work_t* req);
+    static void _Exec(ExecBaton* baton);
     static void Work_AfterExec(uv_work_t* req);
+
+    static Handle<Value> ExecSync(const Arguments& args);
 
     static Handle<Value> Wait(const Arguments& args);
     static void Work_Wait(Baton* baton);

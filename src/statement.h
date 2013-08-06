@@ -202,7 +202,10 @@ public:
     WORK_DEFINITION(Each);
     WORK_DEFINITION(Reset);
 
+    static void _All(RowsBaton* baton, Statement* stmt);
+    static Handle<Value> AllSync(const Arguments& args);
     static Handle<Value> Finalize(const Arguments& args);
+    static Local<Array> CreateResultArray(RowsBaton* baton);
 
 protected:
     static void Work_BeginPrepare(Database::Baton* baton);
