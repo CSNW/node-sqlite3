@@ -120,6 +120,8 @@ protected:
     static void Work_BeginOpen(Baton* baton);
     static void Work_Open(uv_work_t* req);
     static void Work_AfterOpen(uv_work_t* req);
+    static void _Open(OpenBaton* baton, Database* db);
+    static void _AfterOpen(OpenBaton* baton, Database* db);
 
     static Handle<Value> OpenGetter(Local<String> str, const AccessorInfo& accessor);
 

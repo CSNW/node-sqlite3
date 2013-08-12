@@ -125,6 +125,14 @@ Handle<Value> Database::New(const Arguments& args) {
         callback = Local<Function>::Cast(args[pos++]);
     }
 
+    Local<BooleanObject> is_sync;
+    if (args.Length() >= pos && args[pos]->IsBooleanObject()) {
+        is_sync = Local<BooleanObject>::Cast(args[pos]);   
+    }
+    else {
+        is_sync = Local<BooleanObject>::Cast(BooleanObject::New(false));
+    }
+
     Database* db = new Database();
     db->Wrap(args.This());
 
@@ -133,7 +141,20 @@ Handle<Value> Database::New(const Arguments& args) {
 
     // Start opening the database.
     OpenBaton* baton = new OpenBaton(db, callback, *filename, mode);
-    Work_BeginOpen(baton);
+    if (is_sync->BooleanValue()) {
+        _Open(baton, db);
+        if (baton->status != SQLITE_OK) {
+            EXCEPTION(String::New(baton->message.c_str()), baton->status, exception);
+            ThrowException(exception);
+        }
+        else {
+            db->open = true;
+        }
+        _AfterOpen(baton, db);
+    }
+    else {
+        Work_BeginOpen(baton);
+    }
 
     return args.This();
 }
@@ -147,7 +168,10 @@ void Database::Work_BeginOpen(Baton* baton) {
 void Database::Work_Open(uv_work_t* req) {
     OpenBaton* baton = static_cast<OpenBaton*>(req->data);
     Database* db = baton->db;
+    _Open(baton, db);
+}
 
+void Database::_Open(OpenBaton* baton, Database* db) {
     baton->status = sqlite3_open_v2(
         baton->filename.c_str(),
         &db->handle,
@@ -189,6 +213,10 @@ void Database::Work_AfterOpen(uv_work_t* req) {
         EMIT_EVENT(db->handle_, 2, args);
     }
 
+    _AfterOpen(baton, db);    
+}
+
+void Database::_AfterOpen(OpenBaton* baton, Database* db) {
     if (db->open) {
         Local<Value> args[] = { String::NewSymbol("open") };
         EMIT_EVENT(db->handle_, 1, args);

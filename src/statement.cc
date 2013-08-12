@@ -102,7 +102,7 @@ Handle<Value> Statement::New(const Arguments& args) {
     }
     if (length > 3 && !args[3]->IsBooleanObject()) {
         return ThrowException(Exception::TypeError(
-            String::New("Boolean is_sync expected as last argument")));
+            String::New("Boolean is_sync expected as last argument to new Statement()")));
     }
 
     Database* db = ObjectWrap::Unwrap<Database>(args[0]->ToObject());
