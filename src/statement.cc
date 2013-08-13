@@ -642,7 +642,8 @@ Handle<Value> Statement::AllSync(const Arguments& args) {
     if (stmt->status != SQLITE_DONE) {
         //Error(baton);
         // Question: Do I need to finalize the statement or do other cleanup?
-        return ThrowException(Exception::Error(String::New("AllSync Error")));
+        EXCEPTION(String::New(stmt->message.c_str()), stmt->status, exception);
+        return ThrowException(exception); // Exception::Error(String::New("AllSync Error"))
     }
     else {
         if (baton->rows.size()) {
