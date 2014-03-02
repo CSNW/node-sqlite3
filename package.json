@@ -33,13 +33,9 @@
         "node": ">= 0.6.13 && < 0.11.0"
     },
     "scripts": {
-        "install": "nw-gyp rebuild --target=0.8.1 --debug",
         "pretest": "node test/support/createdb.js",
         "test": "mocha -R spec --timeout 200000"
     },
     "licenses": [{ "type": "BSD" }],
-    "main": "./lib/sqlite3",
-    "dependencies": {
-        "nw-gyp": "0.10.9"
-    }
+    "main": "./lib/sqlite3"
 }
